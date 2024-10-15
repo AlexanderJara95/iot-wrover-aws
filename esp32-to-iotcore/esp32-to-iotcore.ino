@@ -1,4 +1,4 @@
-#define MQTT_MAX_PACKET_SIZE 23552  // Ajusta este valor según sea necesario
+#define MQTT_MAX_PACKET_SIZE 102400  // Aumentamos el tamaño máximo del paquete a 100 KB
 #include <PubSubClient.h>
 #include "secrets.h"
 #include <WiFiClientSecure.h>
@@ -23,7 +23,7 @@
 #define HREF_GPIO_NUM  23
 #define PCLK_GPIO_NUM  22
 
-const int bufferSize = 1024 * 23; // 23552 bytes
+const int bufferSize = 1024 * 100;  // Aumentamos el tamaño del buffer a 100 KB
 #define TRIG_PIN  12  // TRIG
 #define ECHO_PIN  14  // ECHO
 const int ledRojo = 12; // Cambia por el pin real usado para el LED rojo
@@ -41,11 +41,10 @@ PubSubClient client(net);
 
 bool sensorActive = false; // Variable para controlar el estado del sensor
 
-
 // Prototipos de funciones
 void messageReceived(char* topic, byte* payload, unsigned int length);
 
-void cameraInit(){
+void cameraInit() {
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -66,19 +65,21 @@ void cameraInit(){
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
-  config.frame_size = FRAMESIZE_VGA; // Asegúrate de que estás usando una resolución adecuada
+
+  config.frame_size = FRAMESIZE_VGA; // Cambia esto si necesitas una resolución más alta
   config.pixel_format = PIXFORMAT_JPEG; // Asegúrate de que esté en JPEG
-  config.jpeg_quality = 12;
+  config.jpeg_quality = 12;  // Puedes ajustar este valor si necesitas reducir el tamaño del archivo
   config.fb_count = 2;
 
-  // camera init
+  // Inicialización de la cámara
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
-    Serial.printf("Camera init failed with error 0x%x", err);
+    Serial.printf("Error al inicializar la cámara 0x%x", err);
     ESP.restart();
     return;
   }
 }
+
 void mqttInit() {
   net.setCACert(AWS_CERT_CA);
   net.setCertificate(AWS_CERT_CRT);
@@ -90,6 +91,7 @@ void mqttInit() {
   // Conectar al servidor MQTT
   connectAWS();
 }
+
 void callback(char* topic, byte* payload, unsigned int length) {
   payload[length] = '\0';  // Asegura que el mensaje sea una cadena terminada en nulo
   String message = String((char*) payload);
@@ -110,10 +112,12 @@ void grabImage() {
     return;
   }
 
+  // Mostrar el tamaño de la imagen capturada
+  Serial.print("Tamaño de imagen capturada: ");
+  Serial.println(fb->len);
+
   if (fb->len < bufferSize) {
-    Serial.print("Image Length: ");
-    Serial.println(fb->len);
-    Serial.print("Publish Image: ");
+    Serial.print("Publicando imagen: ");
     bool result = client.publish(ESP32WROVER_PUBLISH_TOPIC, (const char*)fb->buf, fb->len);
     Serial.println(result ? "Éxito" : "Error en publicación");
   } else {
@@ -124,16 +128,12 @@ void grabImage() {
   delay(1);
 }
 
-
 float getDistance() {
   digitalWrite(TRIG_PIN, HIGH);
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
 
-  // Tiempo en el que el pulso está en HIGH. Esto es el tiempo que tarda en ir y volver
   long duration = pulseIn(ECHO_PIN, HIGH);
-  
-  // Calcula la distancia en centímetros
   float distance = (float)duration / 29.1 / 2;
 
   return distance;
@@ -146,19 +146,18 @@ void connectAWS() {
     delay(1000);
   }
 
-  Serial.println("AWS IoT conectado!");
+  Serial.println("¡AWS IoT conectado!");
   client.subscribe(LED_SUBSCRIBE_TOPIC);
 }
 
 void reconnect() {
-  // Ciclo hasta que estemos reconectados
   while (!client.connected()) {
     Serial.print("Intentando conexión MQTT...");
     if (client.connect(THINGNAME)) {
-      Serial.println("conectado");
+      Serial.println("Conectado");
       client.subscribe(LED_SUBSCRIBE_TOPIC);
     } else {
-      Serial.print("falló, rc=");
+      Serial.print("Fallo, rc=");
       Serial.print(client.state());
       Serial.println(" intentando de nuevo en 5 segundos");
       delay(5000);
@@ -167,21 +166,18 @@ void reconnect() {
 }
 
 void messageReceived(char* topic, byte* payload, unsigned int length) {
-  // Asegúrate de que el mensaje es para el topic de LED
   if (String(topic) == LED_SUBSCRIBE_TOPIC) {
     payload[length] = '\0'; // Asegura que el mensaje sea una cadena terminada en nulo
-    int ledStatus = atoi((char*)payload); // Convierte el mensaje en un entero
+    int ledStatus = atoi((char*)payload);
     setLED(ledStatus);
   }
 }
 
 void setLED(int status) {
-  // Apaga todos los LEDs primero
   digitalWrite(ledRojo, LOW);
   digitalWrite(ledVerde, LOW);
   digitalWrite(ledAmarillo, LOW);
 
-  // Enciende el LED basado en el valor de 'status'
   switch(status) {
     case 0:
       digitalWrite(ledRojo, HIGH);
@@ -196,13 +192,10 @@ void setLED(int status) {
 }
 
 void setup() {
-  // Inicializar Serial, WiFi, cámara y MQTT
   Serial.begin(115200);
-  // Inicialización para el sensor HC-SR04
   pinMode(TRIG_PIN, OUTPUT);
   digitalWrite(TRIG_PIN, LOW);
   pinMode(ECHO_PIN, INPUT);
-  // Configurar pines de LED como salidas
   pinMode(ledRojo, OUTPUT);
   pinMode(ledVerde, OUTPUT);
   pinMode(ledAmarillo, OUTPUT);
@@ -211,22 +204,18 @@ void setup() {
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   cameraInit();
   mqttInit();
-  
 }
 
 void loop() {
-  // Comprueba si hay datos disponibles en el Monitor Serie
   if (Serial.available()) {
-    String command = Serial.readStringUntil('\n'); // Lee hasta un salto de línea
-    command.trim(); // Elimina espacios en blanco
+    String command = Serial.readStringUntil('\n');
+    command.trim();
 
     if (command.equalsIgnoreCase("sensor")) {
-      sensorActive = true; // Activa el sensor
+      sensorActive = true;
       Serial.println("Sensor activado.");
-
-      // Toma una imagen al activar el sensor
       grabImage();
-      sensorActive = false; // Desactiva el sensor
+      sensorActive = false;
     }
   }
 
@@ -235,27 +224,10 @@ void loop() {
     Serial.print("Distancia: ");
     Serial.println(distance);
     if (distance < MAX_DISTANCE) {
-      Serial.println("Objeto cercano, tomar imagen...");
+      Serial.println("Objeto cercano, tomando imagen...");
       grabImage();
-      sensorActive = false; // Desactiva el sensor después de tomar la imagen
+      sensorActive = false;
     }
-    delay(1000); // Espera antes de la próxima medición
+    delay(1000);
   }
 }
-
-/*
-void loop() {
-  if (!client.connected()) {
-    reconnect();
-  }
-  client.loop();
-  float distance = getDistance();
-  if (distance < MAX_DISTANCE) {
-    Serial.println("DISTANCE");
-    Serial.println(distance);
-    if(client.connected()) grabImage();
-    delay(5000);  // Para evitar enviar imágenes constantemente, espera 5 segundos antes de la próxima medición
-  }
-  
-}
-*/
