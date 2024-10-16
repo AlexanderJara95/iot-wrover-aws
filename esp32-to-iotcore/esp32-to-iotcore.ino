@@ -1,4 +1,4 @@
-#define MQTT_MAX_PACKET_SIZE 102400  // Aumentamos el tamaño máximo del paquete a 100 KB
+#define MQTT_MAX_PACKET_SIZE 23552  // Ajusta este valor según sea necesario
 #include <PubSubClient.h>
 #include "secrets.h"
 #include <WiFiClientSecure.h>
@@ -23,8 +23,8 @@
 #define HREF_GPIO_NUM  23
 #define PCLK_GPIO_NUM  22
 
-const int bufferSize = 1024 * 100;  // Aumentamos el tamaño del buffer a 100 KB
-#define TRIG_PIN  12  // TRIG
+const int bufferSize = 1024 * 23; // 23552 bytes
+#define TRIG_PIN  15  // TRIG
 #define ECHO_PIN  14  // ECHO
 const int ledRojo = 12; // Cambia por el pin real usado para el LED rojo
 const int ledVerde = 13; // Cambia por el pin real usado para el LED verde
@@ -39,12 +39,10 @@ const int ledAmarillo = 2; // Cambia por el pin real usado para el LED amarillo
 WiFiClientSecure net;
 PubSubClient client(net);
 
-bool sensorActive = false; // Variable para controlar el estado del sensor
-
 // Prototipos de funciones
 void messageReceived(char* topic, byte* payload, unsigned int length);
 
-void cameraInit() {
+void cameraInit(){
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -65,33 +63,31 @@ void cameraInit() {
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
-
-  config.frame_size = FRAMESIZE_VGA; // Cambia esto si necesitas una resolución más alta
-  config.pixel_format = PIXFORMAT_JPEG; // Asegúrate de que esté en JPEG
-  config.jpeg_quality = 12;  // Puedes ajustar este valor si necesitas reducir el tamaño del archivo
+  config.frame_size = FRAMESIZE_VGA; // 640x480
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.jpeg_quality = 10;
   config.fb_count = 2;
 
-  // Inicialización de la cámara
+  // camera init
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
-    Serial.printf("Error al inicializar la cámara 0x%x", err);
+    Serial.printf("Camera init failed with error 0x%x", err);
     ESP.restart();
     return;
   }
 }
-
 void mqttInit() {
   net.setCACert(AWS_CERT_CA);
   net.setCertificate(AWS_CERT_CRT);
   net.setPrivateKey(AWS_CERT_PRIVATE);
 
   client.setServer(AWS_IOT_ENDPOINT, 8883);
+  client.setBufferSize(bufferSize);
   client.setCallback(messageReceived);
   
   // Conectar al servidor MQTT
   connectAWS();
 }
-
 void callback(char* topic, byte* payload, unsigned int length) {
   payload[length] = '\0';  // Asegura que el mensaje sea una cadena terminada en nulo
   String message = String((char*) payload);
@@ -99,41 +95,33 @@ void callback(char* topic, byte* payload, unsigned int length) {
   setLED(ledStatus);
 }
 
-void grabImage() {
+void grabImage(){
   camera_fb_t * fb = esp_camera_fb_get();
-  if (fb == NULL) {
-    Serial.println("Error al obtener la imagen de la cámara.");
-    return;
-  }
-
-  if (fb->format != PIXFORMAT_JPEG) {
-    Serial.println("Formato de imagen no soportado.");
-    esp_camera_fb_return(fb);
-    return;
-  }
-
-  // Mostrar el tamaño de la imagen capturada
-  Serial.print("Tamaño de imagen capturada: ");
-  Serial.println(fb->len);
-
-  if (fb->len < bufferSize) {
-    Serial.print("Publicando imagen: ");
+  if(fb != NULL && fb->format == PIXFORMAT_JPEG && fb->len < bufferSize){
+    Serial.print("Image Length: ");
+    Serial.print(fb->len);
+    Serial.print("\t Publish Image: ");
     bool result = client.publish(ESP32WROVER_PUBLISH_TOPIC, (const char*)fb->buf, fb->len);
-    Serial.println(result ? "Éxito" : "Error en publicación");
-  } else {
-    Serial.println("El tamaño de la imagen excede el buffer.");
-  }
+    Serial.println(result);
 
+    if(!result){
+      ESP.restart();
+    }
+  }
   esp_camera_fb_return(fb);
   delay(1);
 }
+
 
 float getDistance() {
   digitalWrite(TRIG_PIN, HIGH);
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
 
+  // Tiempo en el que el pulso está en HIGH. Esto es el tiempo que tarda en ir y volver
   long duration = pulseIn(ECHO_PIN, HIGH);
+  
+  // Calcula la distancia en centímetros
   float distance = (float)duration / 29.1 / 2;
 
   return distance;
@@ -146,18 +134,19 @@ void connectAWS() {
     delay(1000);
   }
 
-  Serial.println("¡AWS IoT conectado!");
+  Serial.println("AWS IoT conectado!");
   client.subscribe(LED_SUBSCRIBE_TOPIC);
 }
 
 void reconnect() {
+  // Ciclo hasta que estemos reconectados
   while (!client.connected()) {
     Serial.print("Intentando conexión MQTT...");
     if (client.connect(THINGNAME)) {
-      Serial.println("Conectado");
+      Serial.println("conectado");
       client.subscribe(LED_SUBSCRIBE_TOPIC);
     } else {
-      Serial.print("Fallo, rc=");
+      Serial.print("falló, rc=");
       Serial.print(client.state());
       Serial.println(" intentando de nuevo en 5 segundos");
       delay(5000);
@@ -166,18 +155,21 @@ void reconnect() {
 }
 
 void messageReceived(char* topic, byte* payload, unsigned int length) {
+  // Asegúrate de que el mensaje es para el topic de LED
   if (String(topic) == LED_SUBSCRIBE_TOPIC) {
     payload[length] = '\0'; // Asegura que el mensaje sea una cadena terminada en nulo
-    int ledStatus = atoi((char*)payload);
+    int ledStatus = atoi((char*)payload); // Convierte el mensaje en un entero
     setLED(ledStatus);
   }
 }
 
 void setLED(int status) {
+  // Apaga todos los LEDs primero
   digitalWrite(ledRojo, LOW);
   digitalWrite(ledVerde, LOW);
   digitalWrite(ledAmarillo, LOW);
 
+  // Enciende el LED basado en el valor de 'status'
   switch(status) {
     case 0:
       digitalWrite(ledRojo, HIGH);
@@ -192,10 +184,13 @@ void setLED(int status) {
 }
 
 void setup() {
+  // Inicializar Serial, WiFi, cámara y MQTT
   Serial.begin(115200);
+  // Inicialización para el sensor HC-SR04
   pinMode(TRIG_PIN, OUTPUT);
   digitalWrite(TRIG_PIN, LOW);
   pinMode(ECHO_PIN, INPUT);
+  // Configurar pines de LED como salidas
   pinMode(ledRojo, OUTPUT);
   pinMode(ledVerde, OUTPUT);
   pinMode(ledAmarillo, OUTPUT);
@@ -204,30 +199,20 @@ void setup() {
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   cameraInit();
   mqttInit();
+  
 }
 
 void loop() {
-  if (Serial.available()) {
-    String command = Serial.readStringUntil('\n');
-    command.trim();
-
-    if (command.equalsIgnoreCase("sensor")) {
-      sensorActive = true;
-      Serial.println("Sensor activado.");
-      grabImage();
-      sensorActive = false;
-    }
+  if (!client.connected()) {
+    reconnect();
   }
-
-  if (sensorActive) {
-    float distance = getDistance();
-    Serial.print("Distancia: ");
+  client.loop();
+  float distance = getDistance();
+  if (distance < MAX_DISTANCE) {
+    Serial.println("DISTANCE");
     Serial.println(distance);
-    if (distance < MAX_DISTANCE) {
-      Serial.println("Objeto cercano, tomando imagen...");
-      grabImage();
-      sensorActive = false;
-    }
-    delay(1000);
+    if(client.connected()) grabImage();
+    delay(500000);  // Para evitar enviar imágenes constantemente, espera 5 segundos antes de la próxima medición
   }
+  
 }
