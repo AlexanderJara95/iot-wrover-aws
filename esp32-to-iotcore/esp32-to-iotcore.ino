@@ -101,7 +101,7 @@ void grabImage(){
     Serial.print("Image Length: ");
     Serial.print(fb->len);
     Serial.print("\t Publish Image: ");
-    bool result = client.publish(ESP32WROVER_PUBLISH_TOPIC, (const char*)fb->buf, fb->len);
+    bool result = client.publish(ESP32WROVER_PUBLISH_TOPIC,fb->buf, fb->len);
     Serial.println(result);
 
     if(!result){
